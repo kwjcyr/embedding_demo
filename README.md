@@ -150,6 +150,123 @@ z1 = 0.24×v0 + 0.76×v1
 | **RNN** | 递归更新隐状态 | ✅ | ❌ | `h_t = tanh(W_h h_{t-1} + W_x x_t + b)` |
 | **Transformer** | 动态权重的加权和 | ✅ (通过位置编码) | ✅ | `Attention(Q,K,V) = softmax(QK^T/√d)V` |
 
+## 代码层面：共性与差异
+
+### 共性：训练流程完全一致
+
+三个模型的训练代码**一模一样**，都遵循 PyTorch 的标准训练范式：
+
+```python
+# 前向传播：输入数据 → 模型 → 预测结果
+out = model(inputs)
+
+# 计算损失：预测值与真实标签的差距
+loss = criterion(out, targets)
+
+# 梯度清零：清除上一步的梯度，避免累积
+optimizer.zero_grad()
+
+# 反向传播：计算损失对每个参数的梯度
+loss.backward()
+
+# 参数更新：根据梯度调整参数，让损失下降
+optimizer.step()
+```
+
+**这意味着**：你只需要修改模型定义（`nn.Module` 子类），训练逻辑完全不需要改动！
+
+### 差异：forward() 方法的实现
+
+#### 1. MLP - 平均池化（不关心位置）
+
+```python
+def forward(self, x):
+    emb = self.emb(x)           # (batch, seq_len=2, embed_dim)
+    pooled = emb.mean(dim=1)    # 关键：对序列维度求平均 → (batch, embed_dim)
+    x1 = self.fc1(pooled)
+    x = self.relu(x1)
+    x2 = self.fc2(x)
+    return x2
+```
+
+**特点**：
+- `emb.mean(dim=1)` 把两个词的向量**简单平均**
+- `[cat, love]` 和 `[love, cat]` 得到完全相同的 `pooled`
+- 计算完全并行，一次性处理所有词
+
+#### 2. RNN - 顺序处理（关心位置，但效率低）
+
+```python
+def forward(self, x):
+    emb = self.embedding(x)              # (batch, 2, embed_dim)
+    output, h_n = self.rnn(emb)          # 关键：RNN 处理
+    last_hidden = output[:, -1, :]       # 取最后一个时间步的隐状态
+    logits = self.out(last_hidden)
+    return logits
+```
+
+**为什么 RNN 比 Transformer 慢？**
+
+```python
+output, h_n = self.rnn(emb)
+```
+
+这行代码内部是**串行**的：
+- `h_1 = tanh(W_h · h_0 + W_x · x_0)` ← 必须先算出 `h_1`
+- `h_2 = tanh(W_h · h_1 + W_x · x_1)` ← 依赖 `h_1`，无法并行
+
+**序列越长，RNN 的串行瓶颈越明显**。2 个词时差异不大，但如果是 100 个词的序列，RNN 必须一步步计算 100 次，而 Transformer 可以一次性处理。
+
+#### 3. Transformer - 并行处理（关心位置，效率高）
+
+```python
+def forward(self, x):
+    batch_size, seq_len = x.shape
+    emb = self.embedding(x)              # (batch, 2, embed_dim)
+
+    # 位置编码：让模型知道每个词的位置
+    positions = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, -1)
+    pos_emb = self.pos_embed(positions)
+    x = emb + pos_emb                    # 词向量 + 位置向量
+
+    x = self.transformer(x)              # 关键：Transformer 并行处理所有位置
+    x = x.mean(dim=1)                    # 平均池化
+    logits = self.out(x)
+    return logits
+```
+
+**为什么 Transformer 快？**
+
+自注意力机制一次性计算所有位置之间的关系：
+
+```python
+# 注意力矩阵 (2×2) 一次性算出所有词对的相似度
+# [cat 和 cat, cat 和 love]
+# [love 和 cat, love 和 love]
+Attention(Q, K, V) = softmax(QK^T/√d) V
+```
+
+**位置编码的作用**：
+- 自注意力本身**无法区分** `[cat, love]` 和 `[love, cat]`
+- 通过 `emb + pos_embed`，给每个位置加上独特的"位置标签"
+- 模型就能学会"第一个词"和"第二个词"的不同
+
+### 效率对比
+
+| 操作 | MLP | RNN | Transformer |
+|------|-----|-----|-------------|
+| **前向传播** | ✅ 完全并行 | ❌ 串行（时间步依赖） | ✅ 完全并行 |
+| **序列长度=2** | 最快 | 较快 | 快（但参数多） |
+| **序列长度=100** | 快（但丢失顺序） | 很慢（100 步串行） | 快（仍然并行） |
+| **参数量** | 最少 | 中等 | 最多 |
+
+### 为什么选择这些模型？
+
+- **MLP**：快速基线，适合对顺序不敏感的任务
+- **RNN**：理论上有顺序，但长序列训练慢，梯度容易消失/爆炸
+- **Transformer**：现代主流，并行效率高，长距离依赖建模能力强
+
+
 ## 为什么在这个小任务上 Transformer loss 最低？
 
 用你的实际运行结果（500 轮后）：
