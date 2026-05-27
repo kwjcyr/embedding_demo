@@ -1,131 +1,195 @@
-# Embedding Demo
+# 三种 Embedding 学习模型对比：MLP vs RNN vs Transformer
 
-三种经典的深度学习模型（MLP、RNN、Transformer）的 embedding 实现演示。
+> 通过一个极小的玩具数据集（8 个词，7 个句子），直观对比三种神经网络架构如何学习词向量。
+> **重点**：每个模型的核心数学计算都附有具体数值例子，让你"看到"内部发生了什么。
 
-## 项目简介
+## 背景：我们要解决什么任务？
 
-本项目展示了三种不同的神经网络架构如何学习词向量（word embeddings）：
+**词汇表：**
+- cat(0), dog(1), love(2), eat(3), fish(4), meat(5), ball(6), run(7)
 
-- **MLP (Multilayer Perceptron)**: 最简单的前馈神经网络，通过平均池化提取特征
-- **RNN (Recurrent Neural Network)**: 使用循环神经网络处理序列数据，捕捉时序信息
-- **Transformer**: 基于自注意力机制的现代架构，支持并行计算
-
-所有模型都使用相同的玩具数据集进行训练，便于对比不同架构的特性。
-
-## 快速开始
-
-### 环境要求
-
-- Python 3.8+
-- PyTorch 1.9+
-
-### 安装依赖
-
-```bash
-pip install torch
-```
-
-### 运行示例
-
-```bash
-# 运行 MLP 模型
-python src/emb_mlp.py
-
-# 运行 RNN 模型
-python src/emb_rnn.py
-
-# 运行 Transformer 模型
-python src/emb_transformer.py
-```
-
-## 数据集
-
-使用一个简单的玩具数据集，包含 7 个短句：
+**训练数据（7 个短句，每个句子三个词）：**
 
 ```
-- cat love eat
-- dog love eat
-- cat love run
-- dog love run
-- cat love fish
-- dog love meat
-- dog love ball
+cat love eat
+dog love eat
+cat love run
+dog love run
+cat love fish
+dog love meat
+dog love ball
 ```
 
-**任务**: 给定前两个词，预测第三个词
-
-**词汇表**: 8 个单词 (cat, dog, love, eat, fish, meat, ball, run)
-
-## 模型架构
-
-### 1. MLP (`src/emb_mlp.py`)
+构造 **7 个样本**，每个样本是 `(前两个词，第三个词)`，例如：
 
 ```
-输入 (2 个词) → Embedding → 平均池化 → FC1 (ReLU) → FC2 → 输出
-```
-
-- 词嵌入维度：8
-- 隐藏层维度：16
-- 特点：结构简单，不考虑词序信息
-
-### 2. RNN (`src/emb_rnn.py`)
-
-```
-输入 (序列) → Embedding → RNN → 最后隐状态 → FC → 输出
-```
-
-- 词嵌入维度：8
-- 隐藏层维度：16
-- 特点：捕捉序列的时序信息
-
-### 3. Transformer (`src/emb_transformer.py`)
-
-```
-输入 (序列) → Embedding + 位置编码 → Transformer Encoder → 平均池化 → FC → 输出
-```
-
-- 词嵌入维度：8
-- 注意力头数：2
-- Transformer 层数：2
-- 前馈网络维度：16
-- 特点：自注意力机制，支持并行计算
-
-## 输出示例
-
-训练完成后，每个模型会输出训练后的词向量：
-
-```
-Epoch 100, loss = 1.2345
-Epoch 200, loss = 0.8765
-Epoch 300, loss = 0.5432
-Epoch 400, loss = 0.3210
-Epoch 500, loss = 0.1234
-
-词向量 (Embedding 层):
-cat: [0.12, -0.34, 0.56, ...]
-dog: [0.23, -0.45, 0.67, ...]
+[cat, love] -> eat
+[dog, love] -> eat
 ...
 ```
 
-## 项目结构
+**任务**：给定前两个词，预测第三个词。模型通过这个任务学会每个词的向量表示（embedding）。
+
+## 模型一：MLP（多层感知机）—— 最简单的"平均池化"版本
+
+### 结构
+
+1. 查表得到每个词的向量（`embed_dim=8`）。
+2. 对两个词的向量**求平均**（平均池化）。
+3. 将平均后的向量送入两层全连接网络，输出词表大小的概率分布。
+
+### 核心数学：平均池化
+
+假设两个词 `cat` 和 `love` 的向量（简化 `embed_dim=4`）：
 
 ```
-embedding_demo/
-├── src/
-│   ├── emb_mlp.py          # MLP 模型实现
-│   ├── emb_rnn.py          # RNN 模型实现
-│   └── emb_transformer.py  # Transformer 模型实现
-├── .gitignore
-└── README.md
+cat = [0.5, 1.2, -0.3, 0.8]
+love = [0.1, 0.6, 1.0, -0.4]
 ```
 
-## 学习建议
+平均池化就是逐维度求平均值：
 
-1. **入门**: 从 `emb_mlp.py` 开始，理解最基本的 embedding 训练流程
-2. **进阶**: 运行 `emb_rnn.py`，观察序列建模如何影响词向量学习
-3. **深入**: 尝试 `emb_transformer.py`，了解现代 Transformer 架构的 embedding 方法
+```
+pooled = [(0.5+0.1)/2, (1.2+0.6)/2, (-0.3+1.0)/2, (0.8-0.4)/2]
+       = [0.3, 0.9, 0.35, 0.2]
+```
 
-## License
+这个 `pooled` 向量去掉了词序信息（`[cat,love]` 和 `[love,cat]` 结果一样）。
 
-MIT License
+## 模型二：RNN（循环神经网络）—— 保留顺序
 
+### 结构
+
+1. 查表得到每个词的向量。
+2. 按顺序送入 RNN 单元，在每一步更新隐状态 `h`。
+3. 取最后一个隐状态，通过全连接层输出预测。
+
+### 核心数学：RNN 隐状态更新
+
+RNN 单元使用 `tanh` 激活函数，公式：
+
+```
+h_t = tanh( W_h · h_{t-1} + W_x · x_t + b )
+```
+
+- `h_t` 是时刻 `t` 的隐状态（这里 `hidden_dim=4`）
+- `x_t` 是当前词的向量（`embed_dim=4`）
+- `W_h`（4×4）、`W_x`（4×4）、`b` 是训练的参数
+
+**数值例子**（假设已经训练了一部分，参数已知）：
+
+```
+初始 h_0 = [0,0,0,0]
+
+处理 cat (x0 = [0.5,1.2,-0.3,0.8])：
+h_1 = tanh( W_h·[0,0,0,0] + W_x·x0 + b ) = tanh( some vector )
+假设计算后 h_1 = [0.2, 0.8, -0.1, 0.4]
+
+处理 love (x1 = [0.1,0.6,1.0,-0.4])：
+h_2 = tanh( W_h·h_1 + W_x·x1 + b ) = 假设得到 [0.5, 0.3, 0.7, -0.2]
+```
+
+最后 `h_2` 就是融合了两个词**且保留顺序**的表示。
+
+## 模型三：Transformer（自注意力）—— 并行且全局交互
+
+### 结构
+
+1. 查表得到每个词的向量，加上**位置编码**（因为自注意力本身不关心顺序）。
+2. 经过多层 Transformer Encoder，每层内部有多头自注意力和前馈网络。
+3. 对输出序列的平均（或取最后一个位置）送入全连接层。
+
+### 核心数学：缩放点积自注意力（单头，简化）
+
+输入两个词（`cat` 和 `love`），加上位置编码后的向量（假设训练好的位置编码）：
+
+```
+x0 = [0.6, 1.4, 0.0, 1.2]  # cat + pos0
+x1 = [0.6, 1.2, 1.7, 0.4]  # love + pos1
+```
+
+为简化，假设 `W_Q = W_K = W_V = I`（恒等矩阵），所以：
+
+```
+q0 = x0, k0 = x0, v0 = x0
+q1 = x1, k1 = x1, v1 = x1
+```
+
+**计算注意力分数**（点积，然后缩放 `√d_k = √4 = 2`）：
+
+```
+score00 = q0·k0 = 0.6×0.6 + 1.4×1.4 + 0×0 + 1.2×1.2 = 3.76 → 3.76/2 = 1.88
+score01 = q0·k1 = 0.6×0.6 + 1.4×1.2 + 0×1.7 + 1.2×0.4 = 2.52 → 2.52/2 = 1.26
+score10 = q1·k0 = 1.26
+score11 = q1·k1 = 0.36+1.44+2.89+0.16 = 4.85 → 4.85/2 = 2.425
+```
+
+**Softmax** 得到注意力权重（对每行）：
+
+- 行 0：`exp(1.88)=6.55, exp(1.26)=3.52` → 权重 `[0.65, 0.35]`
+- 行 1：`exp(1.26)=3.52, exp(2.425)=11.30` → 权重 `[0.24, 0.76]`
+
+**加权求和 Value** 得到每个位置的输出：
+
+```
+z0 = 0.65×v0 + 0.35×v1
+   = 0.65×[0.6,1.4,0,1.2] + 0.35×[0.6,1.2,1.7,0.4]
+   = [0.60, 1.33, 0.595, 0.92]
+
+z1 = 0.24×v0 + 0.76×v1
+   = [0.60, 1.248, 1.292, 0.592]
+```
+
+可以看到，自注意力让每个词的新表示都**融入了对方的信息**，而且权重由内容动态决定（不像平均池化固定为 0.5）。
+
+## 三者的核心差异总结
+
+| 模型 | 信息融合方式 | 是否保留顺序 | 能否并行 | 数学本质 |
+|------|-------------|--------------|----------|----------|
+| **MLP** | 固定权重的平均 | ❌ | ✅ | 加权平均 (权重 = 1/长度) |
+| **RNN** | 递归更新隐状态 | ✅ | ❌ | `h_t = tanh(W_h h_{t-1} + W_x x_t + b)` |
+| **Transformer** | 动态权重的加权和 | ✅ (通过位置编码) | ✅ | `Attention(Q,K,V) = softmax(QK^T/√d)V` |
+
+## 为什么在这个小任务上 Transformer loss 最低？
+
+用你的实际运行结果（500 轮后）：
+
+- MLP loss ≈ 1.49
+- RNN loss ≈ 1.46
+- Transformer loss ≈ 1.38
+
+**原因：**
+
+1. Transformer 的参数量最大，拟合能力最强。
+2. 自注意力可以直接建模两个输入词之间的交互，而 RNN 需要顺序传递信息（虽然这里只有两步，差异不大）。
+3. 平均池化完全丢失顺序，而顺序信息在这个任务中有用（因为 `[cat,love]` 与 `[love,cat]` 不同）。
+
+**但注意**：数据只有 7 条，模型越大越容易过拟合。如果增加数据量，Transformer 的优势会更明显。
+
+## 如何运行？
+
+克隆仓库后，直接运行三个脚本：
+
+```bash
+python emb_mlp.py
+python emb_rnn.py
+python emb_transformer.py
+```
+
+每个脚本会自动训练并打印最终的词向量。你可以观察：
+
+1. 训练 loss 的下降曲线。
+2. 不同模型学到的 `cat` 和 `dog` 向量是否接近（理论上应该相似，因为它们的上下文都是 `love` + 某个动作/食物）。
+
+## 扩展到更真实的场景
+
+- **增大词汇表和语料**：可以下载 torchtext 里的 AG_NEWS 或 WikiText-2。
+- **改变任务**：从"预测下一个词"变成"随机 mask 一个词"（MLM），更接近 BERT。
+- **可视化**：用 t-SNE 将 8 维向量降到 2 维，画出词向量的分布。
+
+## 参考资料
+
+- [Word2Vec 论文 (CBOW 和 Skip-gram)](https://arxiv.org/abs/1301.3781)
+- [LSTM 论文 (RNN 的改进)](https://www.bioinf.jku.at/publications/older/2604.pdf)
+- [Attention is All You Need (Transformer)](https://arxiv.org/abs/1706.03762)
+- [PyTorch 官方文档：nn.Embedding, nn.RNN, nn.Transformer](https://pytorch.org/docs/stable/nn.html)
